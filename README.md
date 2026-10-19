@@ -2,25 +2,26 @@
 
 A deliberately small, readable bookmark service used as the starting point for a
 collaboration demo. It is a **starter**, not a finished product: later sessions
-will add soft delete/trash/restore and cursor pagination on top of this base.
+will add trash/restore on top of this base.
 
 ## What is here
 
 - **FastAPI** app with **SQLAlchemy 2.0** ORM models and **Pydantic v2** schemas.
-- **SQLite** by default; switch to **Postgres** with `DATABASE_URL`
-  (`psycopg` 3 driver is already a dependency).
+- **SQLite** by default for local development; **Postgres** is the documented
+  production database (see [ADR 001](docs/adr/001-postgres.md)). Switch with
+  `DATABASE_URL` (`psycopg` 3 driver is already a dependency).
 - CRUD for bookmarks with `id`, `team_id`, `url`, `title`, `created_at`.
-- Unique constraint on `(team_id, url)`.
-- `GET /bookmarks` with **offset/limit pagination**.
-- **Hard delete** that first writes an audit row (`bookmark_audit`).
+- Unique partial index on active `(team_id, url)` pairs.
+- `GET /bookmarks` with **cursor pagination** ordered by `created_at`, `id`.
+  The legacy `page`/`offset` parameters still work for one release.
+- **Soft delete** with a transactional audit row and a tenant-scoped 30-day purge job.
 - Every read and write is scoped to the team in the `X-Team-ID` header.
 
 ## Explicit non-goals (for now)
 
 These are intentionally absent and belong to later sessions:
 
-- soft delete, a trash view, or restore endpoints
-- cursor pagination
+- a trash view or restore endpoints
 - real authentication / authorization
 
 ## Running it
@@ -35,13 +36,21 @@ uvicorn app.main:app --reload
 
 # Postgres
 export DATABASE_URL="postgresql+psycopg://linkshelf:linkshelf@localhost:5432/linkshelf"
-psql "$DATABASE_URL" -f migrations/001_initial.sql
+psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -f migrations/001_initial.sql
+psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -f migrations/002_soft_delete.sql
 uvicorn app.main:app --reload
 ```
 
 The SQLite app creates its tables on startup via SQLAlchemy metadata. For
-Postgres, apply the checked-in migration `migrations/001_initial.sql` instead —
-it is the canonical schema and keeps the two stores aligned.
+Postgres, apply the checked-in migrations in order with a native `POSTGRES_URL`
+(without the SQLAlchemy `+psycopg` suffix). Existing databases need migration 002
+(and 003 for the cursor index); startup does not upgrade tables. See the
+[incident and recovery policy](docs/incidents/sep-bulk-delete.md)
+for deployment, SQLite upgrades, and daily purge scheduling.
+
+**Production uses Postgres.** SQLite stays the zero-setup option for local
+development and tests. The rationale is recorded in
+[docs/adr/001-postgres.md](docs/adr/001-postgres.md).
 
 Interactive docs: <http://127.0.0.1:8000/docs>.
 
@@ -73,11 +82,13 @@ Reads and writes are always filtered by the header:
 | Method | Path | Behaviour |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe, no team header required |
-| `GET` | `/bookmarks?offset=0&limit=20` | Paginated list for the header's team |
-| `POST` | `/bookmarks` | Create; `409` on duplicate `(team_id, url)` |
+| `GET` | `/bookmarks?limit=20` | Cursor-paginated list for the header's team |
+| `GET` | `/bookmarks?limit=20&cursor=<next_cursor>` | Next page |
+| `GET` | `/bookmarks?offset=0&limit=20` | Deprecated numeric window (one release) |
+| `POST` | `/bookmarks` | Create; `409` on duplicate active `(team_id, url)` |
 | `GET` | `/bookmarks/{id}` | Fetch one, team-scoped |
 | `PATCH` | `/bookmarks/{id}` | Partial update of `url` / `title` |
-| `DELETE` | `/bookmarks/{id}` | Hard delete + audit row, `204` |
+| `DELETE` | `/bookmarks/{id}` | Soft delete + audit row, `204` |
 
 List responses look like:
 
@@ -87,30 +98,55 @@ List responses look like:
     {"id": 1, "team_id": 1, "url": "https://example.com", "title": "Example",
      "created_at": "2026-10-19T13:05:00Z"}
   ],
-  "offset": 0,
   "limit": 20,
-  "total": 1
+  "total": 1,
+  "next_cursor": null,
+  "pagination": "cursor",
+  "offset_deprecated": false,
+  "page": null,
+  "offset": null
 }
 ```
 
-`created_at`, `deleted_at` are stored and returned as **UTC**, timezone-aware.
+Pass `next_cursor` back as `cursor` to continue; `null` means the last page.
+Cursors are opaque and ordered by `(created_at DESC, id DESC)`, so inserts and
+deletes between pages do not repeat or skip surviving rows. The cursor is not a
+snapshot. `created_at` is not unique; the `id` tiebreaker keeps the order total.
+
+Timestamps are stored in **UTC**. API `created_at` is timezone-aware; the internal
+`deleted_at` is not added to the public response.
 
 `bookmark_audit` intentionally has no foreign key to `bookmarks`: the audit row
-must survive the hard delete and remain readable if the bookmark id is ever
+must survive permanent purge and remain readable if the bookmark id is ever
 reused.
 
-Pagination parameters are validated: `offset >= 0`, `1 <= limit <= 100`.
+Pagination parameters are validated: `page >= 1`, `offset >= 0`,
+`1 <= limit <= 100`. `cursor` combined with `page` or `offset`, and `page`
+combined with `offset`, return `400`. Legacy `page`/`offset` responses carry
+`Deprecation`, `Sunset`, and `Link` headers. See
+[ADR 002](docs/adr/002-cursor-pagination.md) for the failure modes and the
+deprecation window.
 
 ## Layout
 
 ```
 app/
-  db.py        engine, session dependency, init_db
-  models.py    Bookmark + BookmarkAudit ORM models
-  schemas.py   request/response models
-  main.py      FastAPI routes
+  db.py           engine, session dependency, init_db
+  models.py       Bookmark + BookmarkAudit ORM models
+  schemas.py      request/response models
+  pagination.py   opaque cursor encode/decode
+  main.py         FastAPI routes
+  purge.py        python -m app.purge --team-id TEAM_ID
 migrations/
   001_initial.sql
+  002_soft_delete.sql
+  002_soft_delete_sqlite.sql
+  003_cursor_pagination.sql
+  003_cursor_pagination_sqlite.sql
+docs/
+  adr/001-postgres.md           production database decision
+  adr/002-cursor-pagination.md  cursor pagination decision
 tests/
-  conftest.py, test_bookmarks.py, test_models.py
+  conftest.py, test_bookmarks.py, test_models.py,
+  test_pagination.py, test_soft_delete.py
 ```

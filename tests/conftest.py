@@ -42,5 +42,19 @@ def session():
         yield db
 
 
+def set_created_at(session, bookmark_id: int, created_at) -> None:
+    """Pin a bookmark's created_at so ordering tests are deterministic.
+
+    ``utcnow`` commonly returns the same microsecond for several rows created
+    in a tight loop, which makes a keyset test pass for the wrong reason.
+    """
+    from app.models import Bookmark  # local import keeps conftest import-light
+
+    row = session.get(Bookmark, bookmark_id)
+    assert row is not None
+    row.created_at = created_at
+    session.commit()
+
+
 def team(team_id: int) -> dict[str, str]:
     return {"X-Team-ID": str(team_id)}

@@ -141,7 +141,7 @@ def test_pagination_validation(client):
     assert client.get("/bookmarks?limit=101", headers=team(1)).status_code == 422
 
 
-def test_hard_delete_writes_audit_row(client, session):
+def test_soft_delete_writes_audit_row(client, session):
     created = make_bookmark(client, team_id=3, url="https://gone.test", title="Gone")
 
     response = client.delete(f"/bookmarks/{created['id']}", headers=team(3))
@@ -151,7 +151,7 @@ def test_hard_delete_writes_audit_row(client, session):
     assert client.get(f"/bookmarks/{created['id']}", headers=team(3)).status_code == 404
     assert client.get("/bookmarks", headers=team(3)).json()["total"] == 0
 
-    audits = session.scalars(select(BookmarkAudit)).all()
+    audits = session.scalars(select(BookmarkAudit).where(BookmarkAudit.team_id == 3)).all()
     assert len(audits) == 1
     audit = audits[0]
     assert audit.bookmark_id == created["id"]

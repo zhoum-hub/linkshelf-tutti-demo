@@ -1,0 +1,113 @@
+Cursor pagination verification — 2026-10-19 UTC
+Working directory: /workspace/linkshelf
+Existing project-local .venv and extracted PostgreSQL 16.2 binaries reused;
+no installs, no environment rebuilds, disposable databases only.
+No load benchmarks were run.
+
+=== 1. SQLite: full suite (default isolated temp database) ===
+$ .venv/bin/python -m pytest -v
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-8.4.1, pluggy-1.7.0
+rootdir: /workspace/linkshelf
+configfile: pytest.ini
+testpaths: tests
+plugins: anyio-4.15.1
+collected 51 items
+
+tests/test_bookmarks.py ...............                                  [ 29%]
+tests/test_models.py ..                                                  [ 33%]
+tests/test_pagination.py ............................s.                  [ 92%]
+tests/test_soft_delete.py ....                                           [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 50 passed, 1 skipped, 1 warning in 1.93s ===================
+
+=== 2. Postgres 16.2: migrations 001 -> 002 -> 003 on a disposable database ===
+$ psql ... -f migrations/001_initial.sql
+BEGIN
+CREATE TABLE
+CREATE INDEX
+CREATE TABLE
+CREATE INDEX
+CREATE INDEX
+COMMIT
+$ psql ... -f migrations/002_soft_delete.sql
+BEGIN
+ALTER TABLE
+ALTER TABLE
+CREATE INDEX
+CREATE INDEX
+COMMIT
+$ psql ... -f migrations/003_cursor_pagination.sql
+BEGIN
+CREATE INDEX
+COMMIT
+
+$ psql ... -f migrations/003_cursor_pagination.sql   # replay: must be a no-op
+BEGIN
+psql:migrations/003_cursor_pagination.sql:8: NOTICE:  relation "ix_bookmarks_team_created_id_active" already exists, skipping
+CREATE INDEX
+COMMIT
+
+Applied index definition:
+CREATE INDEX ix_bookmarks_team_created_id_active ON public.bookmarks USING btree (team_id, created_at DESC, id DESC) WHERE (deleted_at IS NULL)
+
+=== 3. Postgres 16.2: full suite against the migrated database ===
+The suite drops and recreates tables per test, so it leaves the schema empty.
+$ DATABASE_URL=postgresql+psycopg://linkshelf@127.0.0.1:55432/linkshelf_cursor_check .venv/bin/python -m pytest -v
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-8.4.1, pluggy-1.7.0
+rootdir: /workspace/linkshelf
+configfile: pytest.ini
+testpaths: tests
+plugins: anyio-4.15.1
+collected 51 items
+
+tests/test_bookmarks.py ...............                                  [ 29%]
+tests/test_models.py ..                                                  [ 33%]
+tests/test_pagination.py ..............................                  [ 92%]
+tests/test_soft_delete.py ....                                           [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 51 passed, 1 warning in 2.16s =========================
+
+=== 4. Access-path check (not a benchmark) ===
+Re-applying 001 -> 003 to the now-empty disposable database for the plan check:
+SQLite EXPLAIN QUERY PLAN for one cursor page:
+  SEARCH bookmarks USING INDEX ix_bookmarks_team_created_id_active (team_id=? AND created_at<?)
+
+Postgres EXPLAIN (COSTS OFF) for one cursor page (prepared statement,
+after inserting 20,000 rows across 40 teams):
+INSERT 0 20000
+ANALYZE
+PREPARE
+                                                                                             QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit
+   ->  Index Scan using ix_bookmarks_team_created_id_active on bookmarks
+         Index Cond: (team_id = 1)
+         Filter: ((created_at < '2026-10-19 15:32:27.931484+00'::timestamp with time zone) OR ((created_at = '2026-10-19 15:32:27.931484+00'::timestamp with time zone) AND (id < '99999'::bigint)))
+(4 rows)
+
+
+=== 5. Cleanup ===
+$ dropdb linkshelf_cursor_check
+disposable database removed; the shared cluster was left running for other work
+
+=== Summary ===
+SQLite: 50 passed, 1 skipped (the Postgres-only migration test), 1 pre-existing
+        Starlette TestClient deprecation warning.
+Postgres 16.2: 51 passed, 1 warning (same pre-existing warning).
+Migrations 001->002->003 applied cleanly; replaying 003 is a no-op.
+Cursor pages use ix_bookmarks_team_created_id_active on both backends.
+No trash or restore behaviour was added or changed.

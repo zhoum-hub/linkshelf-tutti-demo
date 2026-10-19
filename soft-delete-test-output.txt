@@ -1,0 +1,87 @@
+Soft-delete functional and migration verification — 2026-10-19 UTC
+Working directory: /workspace/linkshelf
+Existing .venv and extracted PostgreSQL binaries reused; no installs or rebuilds.
+Tests use disposable databases only. No benchmarks were run.
+
+SQLite command (final run):
+$ .venv/bin/python -m pytest -v
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-8.4.1, pluggy-1.7.0
+rootdir: /workspace/linkshelf
+configfile: pytest.ini
+testpaths: tests
+plugins: anyio-4.15.1
+collected 21 items
+
+tests/test_bookmarks.py ...............                                  [ 71%]
+tests/test_models.py ..                                                  [ 80%]
+tests/test_soft_delete.py ....                                           [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 21 passed, 1 warning in 0.79s =========================
+
+Disposable PostgreSQL setup commands (all succeeded):
+$ /tmp/pgdist/pgserver/pginstall/bin/initdb -D /tmp/linkshelf-soft-delete-pg -U linkshelf -A trust
+$ /tmp/pgdist/pgserver/pginstall/bin/pg_ctl -D /tmp/linkshelf-soft-delete-pg -l /tmp/linkshelf-soft-delete-pg.log -o '-h 127.0.0.1 -p 55439' -w start
+$ /tmp/pgdist/pgserver/pginstall/bin/createdb -h 127.0.0.1 -p 55439 -U linkshelf linkshelf_soft_delete
+
+PostgreSQL command:
+$ DATABASE_URL=postgresql+psycopg://linkshelf@127.0.0.1:55439/linkshelf_soft_delete .venv/bin/python -m pytest -v
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-8.4.1, pluggy-1.7.0
+rootdir: /workspace/linkshelf
+configfile: pytest.ini
+testpaths: tests
+plugins: anyio-4.15.1
+collected 21 items
+
+tests/test_bookmarks.py ...............                                  [ 71%]
+tests/test_models.py ..                                                  [ 80%]
+tests/test_soft_delete.py ....                                           [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 21 passed, 1 warning in 1.03s =========================
+
+Migration and purge CLI smoke checks (all succeeded):
+$ /tmp/pgdist/pgserver/pginstall/bin/psql -h 127.0.0.1 -p 55439 -U linkshelf -d linkshelf_soft_delete -v ON_ERROR_STOP=1 -f migrations/001_initial.sql
+$ /tmp/pgdist/pgserver/pginstall/bin/psql -h 127.0.0.1 -p 55439 -U linkshelf -d linkshelf_soft_delete -v ON_ERROR_STOP=1 -f migrations/002_soft_delete.sql
+$ DATABASE_URL=postgresql+psycopg://linkshelf@127.0.0.1:55439/linkshelf_soft_delete .venv/bin/python -m app.purge --team-id 1
+BEGIN
+CREATE TABLE
+CREATE INDEX
+CREATE TABLE
+CREATE INDEX
+CREATE INDEX
+COMMIT
+BEGIN
+ALTER TABLE
+ALTER TABLE
+CREATE INDEX
+CREATE INDEX
+COMMIT
+Purged 0 bookmarks for team 1
+
+Cleanup:
+$ /tmp/pgdist/pgserver/pginstall/bin/pg_ctl -D /tmp/linkshelf-soft-delete-pg -m fast -w stop
+waiting for server to shut down.... done
+server stopped
+
+Migration tests apply the checked-in SQLite or PostgreSQL upgrade to an old
+schema with data, verify retained rows and audit data, allow URL reuse after
+soft deletion, and reject duplicate active URLs. API/model tests use ORM schema
+creation; the PostgreSQL migration test separately applies 001 then 002.
+The CLI smoke check uses an empty migrated database; nonempty purge behavior,
+30-day boundary, idempotence, and tenant isolation are tested in the suite.
+The Starlette deprecation warning is from an existing dependency.
+$ git diff --check
+(no output; exit 0)

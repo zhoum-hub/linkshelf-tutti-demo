@@ -48,7 +48,7 @@ def get_session():
 def init_db(target_engine=None) -> None:
     """Create tables for local development and the starter tests.
 
-    Production environments are expected to use ``migrations/001_initial.sql``
+    Production environments are expected to use the checked-in migrations in order
     (see README) instead of this helper.
     """
     from app import models  # noqa: F401  (register mappers before create_all)

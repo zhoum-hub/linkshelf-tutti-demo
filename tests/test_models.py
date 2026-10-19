@@ -27,6 +27,6 @@ def test_audit_rows_are_independent_of_bookmarks(session):
     )
     session.commit()
 
-    audit = session.scalars(select(BookmarkAudit)).one()
+    audit = session.scalars(select(BookmarkAudit).where(BookmarkAudit.team_id == 1)).one()
     assert audit.bookmark_id == 42
-    assert session.scalars(select(Bookmark)).all() == []
+    assert session.scalars(select(Bookmark).where(Bookmark.team_id == 1)).all() == []

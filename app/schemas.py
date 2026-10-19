@@ -41,6 +41,16 @@ class BookmarkOut(BaseModel):
 
 class BookmarkPage(BaseModel):
     items: list[BookmarkOut]
-    offset: int
     limit: int
     total: int
+    # Cursor for the next page; ``None`` when this is the last page.
+    next_cursor: str | None = None
+    # ``"cursor"`` for the supported mode, ``"legacy-offset"`` when the caller
+    # used the deprecated page/offset window.
+    pagination: str = "cursor"
+    # ``True`` when the legacy page/offset form of this page was requested.
+    offset_deprecated: bool = False
+    # Legacy fields, kept for one release. They echo the request and are never
+    # used to build a cursor.
+    page: int | None = None
+    offset: int | None = None

@@ -27,16 +27,16 @@ Python.
    columns `timezone=True`. Do not introduce local-time comparisons.
 4. **Both databases must stay in sync.** If you change a model, update
    `migrations/001_initial.sql` (or add a new migration) in the same change.
-5. **Deletes are hard deletes with an audit record.** The audit row is written
-   in the same transaction as the delete. Do not skip it.
+5. **Deletes set deleted_at and write an audit record in one transaction.**
+   Reads and updates must exclude deleted rows. The tenant-scoped purge job
+   removes bookmarks after 30 days and must never remove audit records.
 
 ## What to leave for later
 
 Do not add these unless the task explicitly asks for them; they are planned
 historical follow-ups, not forgotten work:
 
-- soft delete / `deleted_at` filtering, a trash listing, or a restore endpoint
-- cursor (keyset) pagination
+- a trash listing or a restore endpoint
 - real authentication
 
 If a change would add one of these early, call it out in the pull request

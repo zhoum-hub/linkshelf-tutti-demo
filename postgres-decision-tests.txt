@@ -1,0 +1,69 @@
+=== Linkshelf: database decision functional checks ===
+Decision record: docs/adr/001-postgres.md
+Date: 2026-10-19 (UTC)
+
+These are functional compatibility results for the existing test suite. No
+benchmark was run and no performance or capacity claim is made.
+
+=== Environment (as recorded) ===
+Python: 3.13.14
+Platform: Linux x86_64
+Pytest: 8.4.1
+SQLAlchemy: 2.0.43
+psycopg: 3.2.9
+Postgres (cross-check): 16.2, disposable local cluster
+
+=== Command 1: SQLite (default test configuration) ===
+$ python -m pytest -v
+
+Result:
+17 passed, 1 warning in 0.46s
+
+Output summary:
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-8.4.1, pluggy-1.7.0
+rootdir: /workspace/linkshelf
+configfile: pytest.ini
+testpaths: tests
+plugins: anyio-4.15.1
+collected 17 items
+
+tests/test_bookmarks.py ...............                                  [ 88%]
+tests/test_models.py ..                                                  [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  .../starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal
+  alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+
+======================== 17 passed, 1 warning in 0.46s =========================
+
+Database used: isolated temporary SQLite file (sqlite+pysqlite), not
+./linkshelf.db. The single warning comes from Starlette's TestClient and is
+outside this project's code.
+
+=== Command 2: Postgres 16.2 (functional cross-check) ===
+$ export DATABASE_URL="postgresql+psycopg://linkshelf@127.0.0.1:55432/linkshelf"
+$ psql "$DATABASE_URL" -f migrations/001_initial.sql
+$ python -m pytest -v
+
+Result:
+17 passed
+
+The same 17 tests passed unchanged against a disposable local PostgreSQL 16.2
+cluster with the checked-in schema applied. Engine dialect confirmed as
+postgresql with the psycopg driver; CRUD, duplicate 409 behaviour, team
+isolation, hard delete plus audit row, and timezone-aware timestamps all
+behaved correctly.
+
+=== Coverage of the suite ===
+health; create/fetch; missing, zero, negative, and non-integer team headers;
+cross-team read/patch/delete isolation; duplicate URL per team vs across teams;
+offset pagination (non-overlapping pages, beyond-end, validation); hard delete
+plus audit content; URL reuse after delete; model timestamp defaults.
+
+=== Notes ===
+- Tests default to SQLite so they need no running database.
+- The Postgres cross-check used a disposable local cluster; no hosted or
+  shared database was used.
+- No further measurements were taken for this decision.

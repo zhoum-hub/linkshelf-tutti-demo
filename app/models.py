@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Index, Integer, String, Text, desc, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -17,19 +17,34 @@ def utcnow() -> datetime:
 
 class Bookmark(Base):
     __tablename__ = "bookmarks"
-    __table_args__ = (UniqueConstraint("team_id", "url", name="uq_bookmarks_team_id_url"),)
+    __table_args__ = (
+        Index("uq_bookmarks_team_id_url_active", "team_id", "url", unique=True,
+              sqlite_where=text("deleted_at IS NULL"), postgresql_where=text("deleted_at IS NULL")),
+        Index("ix_bookmarks_team_deleted_at", "team_id", "deleted_at"),
+        # Serves the cursor list: equality on team_id, then the descending
+        # (created_at, id) sort key. Partial so deleted rows stay out of it.
+        Index(
+            "ix_bookmarks_team_created_id_active",
+            "team_id",
+            desc("created_at"),
+            desc("id"),
+            sqlite_where=text("deleted_at IS NULL"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     team_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
 
 
 class BookmarkAudit(Base):
-    """One row per hard delete, preserving what was removed and for which team."""
+    """One row per soft delete, preserving what was removed and for which team."""
 
     __tablename__ = "bookmark_audit"
 
