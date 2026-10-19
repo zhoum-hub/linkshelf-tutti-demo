@@ -1,0 +1,9 @@
+# Local artifacts and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.db
+*.sqlite3
+.env
+*.log
