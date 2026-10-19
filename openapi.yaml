@@ -1,0 +1,504 @@
+openapi: 3.1.0
+info:
+  title: Linkshelf
+  description: Minimal team-scoped bookmark service. X-Team-ID is a demo tenant header,
+    not auth.
+  version: 0.1.0
+paths:
+  /health:
+    get:
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Health Health Get
+  /bookmarks:
+    get:
+      summary: List Bookmarks
+      description: 'List a team''s active bookmarks, newest first.
+
+
+        Cursor pagination is the supported form: pass ``next_cursor`` from the
+
+        previous response. ``page`` and ``offset`` remain accepted for one release
+
+        as deprecated aliases for a numeric skip; they are translated into an
+
+        offset, never into a cursor. Mixing ``cursor`` with either is rejected
+
+        because the two window definitions are incompatible.'
+      operationId: list_bookmarks_bookmarks_get
+      parameters:
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Opaque cursor from a previous response's next_cursor
+          title: Cursor
+        description: Opaque cursor from a previous response's next_cursor
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+          title: Offset
+      - name: page
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          title: Page
+      - name: X-Team-ID
+        in: header
+        required: true
+        schema:
+          type: integer
+          title: X-Team-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookmarkPage'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      summary: Create Bookmark
+      operationId: create_bookmark_bookmarks_post
+      parameters:
+      - name: X-Team-ID
+        in: header
+        required: true
+        schema:
+          type: integer
+          title: X-Team-Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookmarkCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookmarkOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /trash:
+    get:
+      summary: List Trash
+      description: 'List the team''s recoverable bookmarks, newest first using opaque
+        v1 cursors.
+
+
+        Only rows deleted strictly less than 30 days ago are included, even if
+
+        expired rows await purge. Ordering is created_at DESC, id DESC.
+
+        X-Team-ID is a demo tenant selector, not authentication.'
+      operationId: list_trash_trash_get
+      parameters:
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+          title: Offset
+      - name: page
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          title: Page
+      - name: X-Team-ID
+        in: header
+        required: true
+        schema:
+          type: integer
+          title: X-Team-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookmarkPage'
+        '400':
+          description: Invalid cursor, page/offset usage, or non-positive X-Team-ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /bookmarks/{bookmark_id}/restore:
+    post:
+      summary: Restore Bookmark
+      description: 'Restore a retained bookmark and append a restore audit snapshot
+        atomically.
+
+
+        Eligibility is strictly less than 30 days since deletion. The original
+
+        identity, URL, title and creation time are preserved. The audit''s historical
+
+        deleted_at column records the UTC event time; delete snapshots are retained.
+
+        Rejected or failed restores add no success event. Audit-write failures roll
+
+        back the restoration and remain server errors, not URL conflicts.
+
+        X-Team-ID is a demo tenant selector, not authentication.'
+      operationId: restore_bookmark_bookmarks__bookmark_id__restore_post
+      parameters:
+      - name: bookmark_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Bookmark Id
+      - name: X-Team-ID
+        in: header
+        required: true
+        schema:
+          type: integer
+          title: X-Team-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookmarkOut'
+        '400':
+          description: X-Team-ID must be positive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Missing, purged, expired (30 days or older), foreign-team,
+            or already-active bookmark.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: An active bookmark in this team already uses the URL, including
+            a re-added URL. No row is overwritten.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Audit-write or other server failure; restoration is rolled
+            back.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Internal Server Error
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /bookmarks/{bookmark_id}:
+    get:
+      summary: Get Bookmark
+      operationId: get_bookmark_bookmarks__bookmark_id__get
+      parameters:
+      - name: bookmark_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Bookmark Id
+      - name: X-Team-ID
+        in: header
+        required: true
+        schema:
+          type: integer
+          title: X-Team-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookmarkOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      summary: Update Bookmark
+      operationId: update_bookmark_bookmarks__bookmark_id__patch
+      parameters:
+      - name: bookmark_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Bookmark Id
+      - name: X-Team-ID
+        in: header
+        required: true
+        schema:
+          type: integer
+          title: X-Team-Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookmarkUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookmarkOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      summary: Delete Bookmark
+      operationId: delete_bookmark_bookmarks__bookmark_id__delete
+      parameters:
+      - name: bookmark_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Bookmark Id
+      - name: X-Team-ID
+        in: header
+        required: true
+        schema:
+          type: integer
+          title: X-Team-Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    BookmarkCreate:
+      properties:
+        url:
+          type: string
+          maxLength: 2048
+          minLength: 1
+          title: Url
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Title
+      type: object
+      required:
+      - url
+      - title
+      title: BookmarkCreate
+    BookmarkOut:
+      properties:
+        id:
+          type: integer
+          title: Id
+        team_id:
+          type: integer
+          title: Team Id
+        url:
+          type: string
+          title: Url
+        title:
+          type: string
+          title: Title
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - id
+      - team_id
+      - url
+      - title
+      - created_at
+      title: BookmarkOut
+    BookmarkPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/BookmarkOut'
+          type: array
+          title: Items
+        limit:
+          type: integer
+          title: Limit
+        total:
+          type: integer
+          title: Total
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+        pagination:
+          type: string
+          title: Pagination
+          default: cursor
+        offset_deprecated:
+          type: boolean
+          title: Offset Deprecated
+          default: false
+        page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Page
+        offset:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Offset
+      type: object
+      required:
+      - items
+      - limit
+      - total
+      title: BookmarkPage
+    BookmarkUpdate:
+      properties:
+        url:
+          anyOf:
+          - type: string
+            maxLength: 2048
+            minLength: 1
+          - type: 'null'
+          title: Url
+        title:
+          anyOf:
+          - type: string
+            maxLength: 200
+            minLength: 1
+          - type: 'null'
+          title: Title
+      type: object
+      title: BookmarkUpdate
+    ErrorResponse:
+      properties:
+        detail:
+          type: string
+          title: Detail
+      type: object
+      required:
+      - detail
+      title: ErrorResponse
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError

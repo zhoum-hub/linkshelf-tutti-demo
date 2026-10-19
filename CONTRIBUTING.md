@@ -36,7 +36,6 @@ Python.
 Do not add these unless the task explicitly asks for them; they are planned
 historical follow-ups, not forgotten work:
 
-- a trash listing or a restore endpoint
 - real authentication
 
 If a change would add one of these early, call it out in the pull request

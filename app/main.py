@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.db import get_session, init_db
 from app.models import Bookmark, BookmarkAudit, utcnow
 from app.pagination import InvalidCursor, decode_cursor, encode_cursor
-from app.schemas import BookmarkCreate, BookmarkOut, BookmarkPage, BookmarkUpdate
+from app.schemas import BookmarkCreate, BookmarkOut, BookmarkPage, BookmarkUpdate, ErrorResponse
 
 
 @asynccontextmanager
@@ -157,7 +157,13 @@ def list_bookmarks(
     )
 
 
-@app.get("/trash", response_model=BookmarkPage)
+@app.get(
+    "/trash",
+    response_model=BookmarkPage,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid cursor, page/offset usage, or non-positive X-Team-ID."},
+    },
+)
 def list_trash(
     cursor: str | None = Query(None),
     limit: int = Query(20, ge=1, le=100),
@@ -166,7 +172,12 @@ def list_trash(
     team_id: int = Depends(current_team_id),
     session: Session = Depends(get_session),
 ) -> BookmarkPage:
-    """List recoverable rows using the same stable keys as the active list."""
+    """List the team's recoverable bookmarks, newest first using opaque v1 cursors.
+
+    Only rows deleted strictly less than 30 days ago are included, even if
+    expired rows await purge. Ordering is created_at DESC, id DESC.
+    X-Team-ID is a demo tenant selector, not authentication.
+    """
     if offset is not None or page is not None:
         raise HTTPException(status_code=400, detail="trash supports cursor pagination only")
     base = select(Bookmark).where(
@@ -209,12 +220,30 @@ def _is_active_url_conflict(exc: IntegrityError) -> bool:
     )
 
 
-@app.post("/bookmarks/{bookmark_id}/restore", response_model=BookmarkOut)
+@app.post(
+    "/bookmarks/{bookmark_id}/restore",
+    response_model=BookmarkOut,
+    responses={
+        400: {"model": ErrorResponse, "description": "X-Team-ID must be positive."},
+        404: {"model": ErrorResponse, "description": "Missing, purged, expired (30 days or older), foreign-team, or already-active bookmark."},
+        409: {"model": ErrorResponse, "description": "An active bookmark in this team already uses the URL, including a re-added URL. No row is overwritten."},
+        500: {"description": "Audit-write or other server failure; restoration is rolled back.", "content": {"text/plain": {"schema": {"type": "string"}, "example": "Internal Server Error"}}},
+    },
+)
 def restore_bookmark(
     bookmark_id: int,
     team_id: int = Depends(current_team_id),
     session: Session = Depends(get_session),
 ) -> Bookmark:
+    """Restore a retained bookmark and append a restore audit snapshot atomically.
+
+    Eligibility is strictly less than 30 days since deletion. The original
+    identity, URL, title and creation time are preserved. The audit's historical
+    deleted_at column records the UTC event time; delete snapshots are retained.
+    Rejected or failed restores add no success event. Audit-write failures roll
+    back the restoration and remain server errors, not URL conflicts.
+    X-Team-ID is a demo tenant selector, not authentication.
+    """
     restored_at = utcnow()
     # Claim an eligible row atomically. Only this UPDATE can produce a URL
     # conflict; audit and commit failures must remain server errors.

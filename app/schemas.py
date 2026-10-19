@@ -54,3 +54,7 @@ class BookmarkPage(BaseModel):
     # used to build a cursor.
     page: int | None = None
     offset: int | None = None
+
+
+class ErrorResponse(BaseModel):
+    detail: str

@@ -2,7 +2,7 @@
 
 A deliberately small, readable bookmark service used as the starting point for a
 collaboration demo. It is a **starter**, not a finished product: later sessions
-will add trash/restore on top of this base.
+can build on the included trash/restore feature.
 
 ## What is here
 
@@ -15,13 +15,13 @@ will add trash/restore on top of this base.
 - `GET /bookmarks` with **cursor pagination** ordered by `created_at`, `id`.
   The legacy `page`/`offset` parameters still work for one release.
 - **Soft delete** with a transactional audit row and a tenant-scoped 30-day purge job.
+- Cursor-paginated trash and atomic restore with transactional audit snapshots.
 - Every read and write is scoped to the team in the `X-Team-ID` header.
 
 ## Explicit non-goals (for now)
 
 These are intentionally absent and belong to later sessions:
 
-- a trash view or restore endpoints
 - real authentication / authorization
 
 ## Running it
@@ -35,9 +35,11 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 
 # Postgres
+export POSTGRES_URL="postgresql://linkshelf:linkshelf@localhost:5432/linkshelf"
 export DATABASE_URL="postgresql+psycopg://linkshelf:linkshelf@localhost:5432/linkshelf"
 psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -f migrations/001_initial.sql
 psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -f migrations/002_soft_delete.sql
+psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -f migrations/003_cursor_pagination.sql
 uvicorn app.main:app --reload
 ```
 
@@ -89,6 +91,8 @@ Reads and writes are always filtered by the header:
 | `GET` | `/bookmarks/{id}` | Fetch one, team-scoped |
 | `PATCH` | `/bookmarks/{id}` | Partial update of `url` / `title` |
 | `DELETE` | `/bookmarks/{id}` | Soft delete + audit row, `204` |
+| `GET` | `/trash` | Team-scoped recoverable rows; cursor pagination |
+| `POST` | `/bookmarks/{id}/restore` | Restore + audit; `404` if ineligible, `409` on active URL conflict |
 
 List responses look like:
 
@@ -148,7 +152,7 @@ docs/
   adr/002-cursor-pagination.md  cursor pagination decision
 tests/
   conftest.py, test_bookmarks.py, test_models.py,
-  test_pagination.py, test_soft_delete.py
+  test_pagination.py, test_soft_delete.py, test_restore.py, test_restore_audit.py
 ```
 
 ### Trash and restore (LIN-212)
@@ -183,4 +187,9 @@ restoration and remain server errors; only active-URL uniqueness conflicts retur
 No schema change or migration is needed. `X-Team-ID` is still only a demo tenant
 selector: real authentication and authorization remain outside this starter.
 
-Verification and packaging for this change are recorded in `test-output.txt`.
+LIN-212 is a fictional demo ticket, with no external Linear issue.
+
+`openapi.yaml` is generated from `app.openapi()` and matches `/openapi.json`.
+Verification and final packaging are recorded in `final-test-output.txt`; the
+current PR description is in `pr-description.md`. Earlier review notes are
+historical snapshots of the source and checks at their stated times.
