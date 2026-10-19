@@ -1,0 +1,152 @@
+Fresh Agent-side SQLite checks, 2026-10-19 UTC
+Working directory: /workspace/linkshelf
+Existing virtualenv; no dependency installation.
+export DATABASE_URL=sqlite+pysqlite:////tmp/linkshelf-review-v2-mni9ls_0/review.db
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+
+$ .venv/bin/python -c 'import sys,sqlite3; from importlib.metadata import version; print("Python:",sys.version); print("SQLite:",sqlite3.sqlite_version); [print(p+"=="+version(p)) for p in ("fastapi","uvicorn","SQLAlchemy","pydantic","psycopg","pytest","httpx")]'
+Python: 3.13.14 (main, Jun 23 2026, 15:18:27) [Clang 22.1.3 ]
+SQLite: 3.53.1
+fastapi==0.116.1
+uvicorn==0.35.0
+SQLAlchemy==2.0.43
+pydantic==2.11.7
+psycopg==3.2.9
+pytest==8.4.1
+httpx==0.28.1
+Exit code: 0
+
+$ .venv/bin/python -m pytest -o addopts= -p no:cacheprovider -vv tests/test_restore.py
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-8.4.1, pluggy-1.7.0 -- /workspace/linkshelf/.venv/bin/python
+rootdir: /workspace/linkshelf
+configfile: pytest.ini
+collecting ... collected 19 items
+
+tests/test_restore.py::test_restore_preserves_identity_and_audit_and_can_delete_again PASSED [  5%]
+tests/test_restore.py::test_conflict_rolls_back_then_restore_after_conflicting_row_deleted PASSED [ 10%]
+tests/test_restore.py::test_tenant_boundary_and_cross_team_url PASSED    [ 15%]
+tests/test_restore.py::test_retention_boundary_and_purge[one-microsecond-before-expiry] PASSED [ 21%]
+tests/test_restore.py::test_retention_boundary_and_purge[exactly-30-days] PASSED [ 26%]
+tests/test_restore.py::test_retention_boundary_and_purge[one-microsecond-after-expiry] PASSED [ 31%]
+tests/test_restore.py::test_retention_boundary_and_purge[expired-purge-delayed] PASSED [ 36%]
+tests/test_restore.py::test_expired_restore_with_reused_url_is_not_a_conflict[30] PASSED [ 42%]
+tests/test_restore.py::test_expired_restore_with_reused_url_is_not_a_conflict[31] PASSED [ 47%]
+tests/test_restore.py::test_trash_cursor_ties_and_changes_between_pages PASSED [ 52%]
+tests/test_restore.py::test_trash_validation[cursor=bad-400] PASSED      [ 57%]
+tests/test_restore.py::test_trash_validation[limit=0-422] PASSED         [ 63%]
+tests/test_restore.py::test_trash_validation[limit=101-422] PASSED       [ 68%]
+tests/test_restore.py::test_trash_validation[offset=0-400] PASSED        [ 73%]
+tests/test_restore.py::test_trash_validation[page=1-400] PASSED          [ 78%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers0-422] PASSED [ 84%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers1-400] PASSED [ 89%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers2-400] PASSED [ 94%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers3-422] PASSED [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 19 passed, 1 warning in 0.89s =========================
+Exit code: 0
+
+$ .venv/bin/python -m pytest -o addopts= -p no:cacheprovider -vv
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-8.4.1, pluggy-1.7.0 -- /workspace/linkshelf/.venv/bin/python
+rootdir: /workspace/linkshelf
+configfile: pytest.ini
+testpaths: tests
+collecting ... collected 70 items
+
+tests/test_bookmarks.py::test_health PASSED                              [  1%]
+tests/test_bookmarks.py::test_create_and_fetch_bookmark PASSED           [  2%]
+tests/test_bookmarks.py::test_missing_team_header_is_rejected PASSED     [  4%]
+tests/test_bookmarks.py::test_non_positive_team_header_is_rejected PASSED [  5%]
+tests/test_bookmarks.py::test_non_integer_team_header_is_rejected PASSED [  7%]
+tests/test_bookmarks.py::test_reads_are_scoped_to_team PASSED            [  8%]
+tests/test_bookmarks.py::test_unique_url_per_team PASSED                 [ 10%]
+tests/test_bookmarks.py::test_update_bookmark PASSED                     [ 11%]
+tests/test_bookmarks.py::test_update_to_existing_url_is_conflict PASSED  [ 12%]
+tests/test_bookmarks.py::test_offset_pagination PASSED                   [ 14%]
+tests/test_bookmarks.py::test_pagination_validation PASSED               [ 15%]
+tests/test_bookmarks.py::test_soft_delete_writes_audit_row PASSED        [ 17%]
+tests/test_bookmarks.py::test_delete_does_not_remove_other_teams_rows PASSED [ 18%]
+tests/test_bookmarks.py::test_validation_errors PASSED                   [ 20%]
+tests/test_bookmarks.py::test_deleted_url_can_be_reused PASSED           [ 21%]
+tests/test_models.py::test_bookmark_defaults_to_utc PASSED               [ 22%]
+tests/test_models.py::test_audit_rows_are_independent_of_bookmarks PASSED [ 24%]
+tests/test_pagination.py::test_insert_during_scrolling_does_not_repeat_a_row PASSED [ 25%]
+tests/test_pagination.py::test_delete_during_scrolling_does_not_skip_a_row PASSED [ 27%]
+tests/test_pagination.py::test_delete_of_the_cursor_row_still_resumes_after_it PASSED [ 28%]
+tests/test_pagination.py::test_walk_returns_every_row_once_in_order PASSED [ 30%]
+tests/test_pagination.py::test_equal_created_at_values_use_id_tiebreaker PASSED [ 31%]
+tests/test_pagination.py::test_last_page_has_no_next_cursor_and_exact_fit_is_terminal PASSED [ 32%]
+tests/test_pagination.py::test_empty_team_has_no_cursor PASSED           [ 34%]
+tests/test_pagination.py::test_cursor_is_scoped_to_the_tenant PASSED     [ 35%]
+tests/test_pagination.py::test_soft_deleted_rows_are_excluded_from_cursor_pages PASSED [ 37%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[not-a-cursor] PASSED [ 38%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v2.abc] PASSED [ 40%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.] PASSED  [ 41%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.!!!!] PASSED [ 42%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMCswMDowMA==] PASSED [ 44%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMHxub3QtYW4taW50] PASSED [ 45%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMHww] PASSED [ 47%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMHwz] PASSED [ 48%]
+tests/test_pagination.py::test_cursor_token_round_trips_and_is_opaque PASSED [ 50%]
+tests/test_pagination.py::test_offset_form_still_works_and_is_marked_deprecated PASSED [ 51%]
+tests/test_pagination.py::test_page_form_is_translated_to_offset PASSED  [ 52%]
+tests/test_pagination.py::test_cursor_default_response_has_no_deprecation_headers PASSED [ 54%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[cursor=v1.abc&offset=0] PASSED [ 55%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[cursor=v1.abc&page=1] PASSED [ 57%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[cursor=v1.abc&offset=1&page=1] PASSED [ 58%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[offset=0&page=1] PASSED [ 60%]
+tests/test_pagination.py::test_mutually_exclusive_detail_message PASSED  [ 61%]
+tests/test_pagination.py::test_legacy_parameters_keep_their_validation PASSED [ 62%]
+tests/test_pagination.py::test_cursor_index_migration_preserves_rows_and_is_idempotent PASSED [ 64%]
+tests/test_pagination.py::test_cursor_index_migration_on_postgres SKIPPED [ 65%]
+tests/test_pagination.py::test_cursor_queries_exclude_deleted_rows_at_the_sql_level PASSED [ 67%]
+tests/test_restore.py::test_restore_preserves_identity_and_audit_and_can_delete_again PASSED [ 68%]
+tests/test_restore.py::test_conflict_rolls_back_then_restore_after_conflicting_row_deleted PASSED [ 70%]
+tests/test_restore.py::test_tenant_boundary_and_cross_team_url PASSED    [ 71%]
+tests/test_restore.py::test_retention_boundary_and_purge[one-microsecond-before-expiry] PASSED [ 72%]
+tests/test_restore.py::test_retention_boundary_and_purge[exactly-30-days] PASSED [ 74%]
+tests/test_restore.py::test_retention_boundary_and_purge[one-microsecond-after-expiry] PASSED [ 75%]
+tests/test_restore.py::test_retention_boundary_and_purge[expired-purge-delayed] PASSED [ 77%]
+tests/test_restore.py::test_expired_restore_with_reused_url_is_not_a_conflict[30] PASSED [ 78%]
+tests/test_restore.py::test_expired_restore_with_reused_url_is_not_a_conflict[31] PASSED [ 80%]
+tests/test_restore.py::test_trash_cursor_ties_and_changes_between_pages PASSED [ 81%]
+tests/test_restore.py::test_trash_validation[cursor=bad-400] PASSED      [ 82%]
+tests/test_restore.py::test_trash_validation[limit=0-422] PASSED         [ 84%]
+tests/test_restore.py::test_trash_validation[limit=101-422] PASSED       [ 85%]
+tests/test_restore.py::test_trash_validation[offset=0-400] PASSED        [ 87%]
+tests/test_restore.py::test_trash_validation[page=1-400] PASSED          [ 88%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers0-422] PASSED [ 90%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers1-400] PASSED [ 91%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers2-400] PASSED [ 92%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers3-422] PASSED [ 94%]
+tests/test_soft_delete.py::test_deleted_rows_are_hidden_and_retained PASSED [ 95%]
+tests/test_soft_delete.py::test_purge_boundary_tenant_isolation_and_audit_survival PASSED [ 97%]
+tests/test_soft_delete.py::test_delete_audit_failure_rolls_back PASSED   [ 98%]
+tests/test_soft_delete.py::test_upgrade_preserves_data_and_changes_uniqueness PASSED [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 69 passed, 1 skipped, 1 warning in 2.81s ===================
+Exit code: 0
+
+$ git diff --check
+Exit code: 0
+
+$ git diff --cached --check
+Exit code: 0
+
+Archive preparation: files selected from git ls-files (working-tree bytes), plus feature notes and v2 review records.
+Excluded older restore-review-window.md and review-window-tests.txt; preserved in /tmp/linkshelf-review-working-notes.
+Actual validation: Python zipfile.ZipFile.testzip() returned None; all 36 entries matched working-tree bytes; forbidden older review basenames absent. Exit code: 0.
+After adding this result to the log, the archive is rebuilt and the same CRC, byte equality and exclusion assertions are repeated.

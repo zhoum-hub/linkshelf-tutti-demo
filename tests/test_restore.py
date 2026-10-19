@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
+from app.db import SessionLocal
 from app.models import Bookmark, BookmarkAudit
 from app.purge import purge_deleted
 from tests.conftest import team
@@ -33,9 +34,9 @@ def test_restore_preserves_identity_and_audit_and_can_delete_again(client, sessi
     assert client.get(f"/bookmarks/{row['id']}", headers=team(1)).status_code == 200
     assert client.get("/trash", headers=team(1)).json()["total"] == 0
     assert client.post(f"/bookmarks/{row['id']}/restore", headers=team(1)).status_code == 404
-    assert len(session.scalars(select(BookmarkAudit)).all()) == 1
+    assert [audit.action for audit in session.scalars(select(BookmarkAudit).order_by(BookmarkAudit.id))] == ["delete", "restore"]
     assert client.delete(f"/bookmarks/{row['id']}", headers=team(1)).status_code == 204
-    assert len(session.scalars(select(BookmarkAudit)).all()) == 2
+    assert [audit.action for audit in session.scalars(select(BookmarkAudit).order_by(BookmarkAudit.id))] == ["delete", "restore", "delete"]
 
 
 def test_conflict_rolls_back_then_restore_after_conflicting_row_deleted(client, session):
@@ -60,14 +61,56 @@ def test_tenant_boundary_and_cross_team_url(client, session):
     assert client.post("/bookmarks/999999/restore", headers=team(1)).status_code == 404
 
 
-@pytest.mark.parametrize("age,eligible", [(30, False), (31, False), (29.99999, True)])
+@pytest.mark.parametrize("age,eligible", [
+    pytest.param(timedelta(days=30) - timedelta(microseconds=1), True, id="one-microsecond-before-expiry"),
+    pytest.param(timedelta(days=30), False, id="exactly-30-days"),
+    pytest.param(timedelta(days=30, microseconds=1), False, id="one-microsecond-after-expiry"),
+    pytest.param(timedelta(days=31), False, id="expired-purge-delayed"),
+])
 def test_retention_boundary_and_purge(client, session, age, eligible):
-    row = deleted(client, session, age=age)
-    assert client.get("/trash", headers=team(1)).json()["total"] == int(eligible)
-    assert client.post(f"/bookmarks/{row['id']}/restore", headers=team(1)).status_code == (200 if eligible else 404)
-    purge_deleted(session, 1, now=NOW)
+    row = deleted(client, session)
+    stored = session.get(Bookmark, row["id"])
+    stored.deleted_at = NOW - age
     session.commit()
+    session.refresh(stored)
+    original_deleted_at = stored.deleted_at
+
+    trash = client.get("/trash", headers=team(1))
+    assert trash.status_code == 200
+    assert [item["id"] for item in trash.json()["items"]] == ([row["id"]] if eligible else [])
+    assert trash.json()["total"] == int(eligible)
+    response = client.post(f"/bookmarks/{row['id']}/restore", headers=team(1))
+    assert response.status_code == (200 if eligible else 404), response.text
+    if not eligible:
+        assert response.json() == {"detail": "Bookmark not found"}
+    session.expire_all()
+    stored = session.get(Bookmark, row["id"])
+    assert stored is not None  # No physical purge has happened yet.
+    assert stored.deleted_at == (None if eligible else original_deleted_at)
+    assert client.get(f"/bookmarks/{row['id']}", headers=team(1)).status_code == (200 if eligible else 404)
+
+    # The purge CLI uses a fresh session, independent of API/test ORM state.
+    session.rollback()
+    with SessionLocal.begin() as purge_session:
+        assert purge_deleted(purge_session, 1, now=NOW) == int(not eligible)
+    session.expire_all()
+    assert (session.get(Bookmark, row["id"]) is not None) == eligible
     assert client.post(f"/bookmarks/{row['id']}/restore", headers=team(1)).status_code == 404
+    assert [audit.action for audit in session.scalars(select(BookmarkAudit).order_by(BookmarkAudit.id))] == (["delete", "restore"] if eligible else ["delete"])
+
+
+@pytest.mark.parametrize("age", [30, 31])
+def test_expired_restore_with_reused_url_is_not_a_conflict(client, session, age):
+    row = deleted(client, session, age=age)
+    session.refresh(session.get(Bookmark, row["id"]))
+    original_deleted_at = session.get(Bookmark, row["id"]).deleted_at
+    active = client.post("/bookmarks", headers=team(1), json={"url": row["url"], "title": "Replacement"}).json()
+    response = client.post(f"/bookmarks/{row['id']}/restore", headers=team(1))
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": "Bookmark not found"}
+    session.expire_all()
+    assert session.get(Bookmark, row["id"]).deleted_at == original_deleted_at
+    assert client.get(f"/bookmarks/{active['id']}", headers=team(1)).json() == active
     assert len(session.scalars(select(BookmarkAudit)).all()) == 1
 
 

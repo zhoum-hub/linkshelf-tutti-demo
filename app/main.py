@@ -7,6 +7,7 @@ there is no user identity, token check, or permission model in this starter.
 
 from __future__ import annotations
 
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
@@ -193,30 +194,62 @@ def list_trash(
     )
 
 
+def _is_active_url_conflict(exc: IntegrityError) -> bool:
+    """Recognize only the active bookmark URL index on supported databases."""
+    original = exc.orig
+    if getattr(original, "sqlstate", None) == "23505":
+        return (
+            getattr(getattr(original, "diag", None), "constraint_name", None)
+            == "uq_bookmarks_team_id_url_active"
+        )
+    return (
+        isinstance(original, sqlite3.IntegrityError)
+        and getattr(original, "sqlite_errorcode", None) == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+        and str(original) == "UNIQUE constraint failed: bookmarks.team_id, bookmarks.url"
+    )
+
+
 @app.post("/bookmarks/{bookmark_id}/restore", response_model=BookmarkOut)
 def restore_bookmark(
     bookmark_id: int,
     team_id: int = Depends(current_team_id),
     session: Session = Depends(get_session),
 ) -> Bookmark:
-    # Claim an eligible row atomically. The active-only unique index arbitrates
-    # URL conflicts, including concurrent creates/restores; never overwrite.
+    restored_at = utcnow()
+    # Claim an eligible row atomically. Only this UPDATE can produce a URL
+    # conflict; audit and commit failures must remain server errors.
     try:
         bookmark = session.execute(
             update(Bookmark)
             .where(Bookmark.id == bookmark_id, Bookmark.team_id == team_id,
-                   Bookmark.deleted_at > utcnow() - timedelta(days=30))
+                   Bookmark.deleted_at > restored_at - timedelta(days=30))
             .values(deleted_at=None)
             .returning(Bookmark)
         ).scalar_one_or_none()
-        if bookmark is None:
-            raise HTTPException(status_code=404, detail="Bookmark not found")
-        session.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         session.rollback()
-        raise HTTPException(
-            status_code=409, detail="A bookmark with this URL already exists for the team"
-        ) from None
+        if _is_active_url_conflict(exc):
+            raise HTTPException(
+                status_code=409, detail="A bookmark with this URL already exists for the team"
+            ) from None
+        raise
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    try:
+        session.add(
+            BookmarkAudit(
+                bookmark_id=bookmark.id,
+                team_id=bookmark.team_id,
+                url=bookmark.url,
+                title=bookmark.title,
+                action="restore",
+                deleted_at=restored_at,
+            )
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     return bookmark
 
 

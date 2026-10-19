@@ -44,7 +44,10 @@ class Bookmark(Base):
 
 
 class BookmarkAudit(Base):
-    """One row per soft delete, preserving what was removed and for which team."""
+    """Independent delete/restore snapshots that survive bookmark purge.
+
+    The historical ``deleted_at`` column stores the event time for both actions.
+    """
 
     __tablename__ = "bookmark_audit"
 

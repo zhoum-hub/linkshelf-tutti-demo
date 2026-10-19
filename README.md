@@ -173,7 +173,13 @@ active URL returns 409 and rolls back the restore; no bookmark is overwritten.
 Delete or edit the conflicting active bookmark before retrying. Deleted copies
 and copies in other teams do not conflict. Conditional SQL updates and the
 unique index arbitrate concurrent writes; no pre-read ownership check is used.
-Deletion audit snapshots remain unchanged; restoration adds no audit event.
+Deletion audit snapshots remain unchanged. Each successful restoration writes an
+`action="restore"` snapshot with the bookmark ID, team, URL and title in the same
+transaction as clearing `deleted_at`. The audit table's historical `deleted_at`
+column records the event time (UTC) for both delete and restore actions. Rejected
+or conflicting restores add no success event. Audit-write failures roll back the
+restoration and remain server errors; only active-URL uniqueness conflicts return
+409. Both delete and restore audit records survive bookmark purge.
 No schema change or migration is needed. `X-Team-ID` is still only a demo tenant
 selector: real authentication and authorization remain outside this starter.
 
