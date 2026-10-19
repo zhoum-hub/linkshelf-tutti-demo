@@ -8,6 +8,7 @@ there is no user identity, token check, or permission model in this starter.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from sqlalchemy import and_, func, or_, select, update
@@ -153,6 +154,70 @@ def list_bookmarks(
         page=page,
         offset=offset,
     )
+
+
+@app.get("/trash", response_model=BookmarkPage)
+def list_trash(
+    cursor: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int | None = Query(None, ge=0),
+    page: int | None = Query(None, ge=1),
+    team_id: int = Depends(current_team_id),
+    session: Session = Depends(get_session),
+) -> BookmarkPage:
+    """List recoverable rows using the same stable keys as the active list."""
+    if offset is not None or page is not None:
+        raise HTTPException(status_code=400, detail="trash supports cursor pagination only")
+    base = select(Bookmark).where(
+        Bookmark.team_id == team_id,
+        Bookmark.deleted_at > utcnow() - timedelta(days=30),
+    )
+    ordered = base.order_by(Bookmark.created_at.desc(), Bookmark.id.desc())
+    if cursor is not None:
+        try:
+            key = decode_cursor(cursor)
+        except InvalidCursor as exc:
+            raise HTTPException(status_code=400, detail=f"invalid cursor: {exc}") from None
+        ordered = ordered.where(or_(
+            Bookmark.created_at < key.created_at,
+            and_(Bookmark.created_at == key.created_at, Bookmark.id < key.id),
+        ))
+    rows = session.scalars(ordered.limit(limit + 1)).all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return BookmarkPage(
+        items=[BookmarkOut.model_validate(row) for row in rows],
+        limit=limit,
+        total=session.scalar(select(func.count()).select_from(base.subquery())) or 0,
+        next_cursor=encode_cursor(rows[-1].created_at, rows[-1].id) if has_more else None,
+    )
+
+
+@app.post("/bookmarks/{bookmark_id}/restore", response_model=BookmarkOut)
+def restore_bookmark(
+    bookmark_id: int,
+    team_id: int = Depends(current_team_id),
+    session: Session = Depends(get_session),
+) -> Bookmark:
+    # Claim an eligible row atomically. The active-only unique index arbitrates
+    # URL conflicts, including concurrent creates/restores; never overwrite.
+    try:
+        bookmark = session.execute(
+            update(Bookmark)
+            .where(Bookmark.id == bookmark_id, Bookmark.team_id == team_id,
+                   Bookmark.deleted_at > utcnow() - timedelta(days=30))
+            .values(deleted_at=None)
+            .returning(Bookmark)
+        ).scalar_one_or_none()
+        if bookmark is None:
+            raise HTTPException(status_code=404, detail="Bookmark not found")
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(
+            status_code=409, detail="A bookmark with this URL already exists for the team"
+        ) from None
+    return bookmark
 
 
 @app.post("/bookmarks", response_model=BookmarkOut, status_code=status.HTTP_201_CREATED)

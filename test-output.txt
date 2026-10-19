@@ -1,0 +1,468 @@
+LIN-212 verification record
+Tests were written and run before app/main.py was changed.
+Initial environment attempt could not load pytest's auto-discovered anyio plugin:
+its cached source path refers to a prior VM user's inaccessible home directory.
+No dependencies were changed. PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 avoids that plugin;
+these are synchronous TestClient tests and require no external pytest plugin.
+
+RED command: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest tests/test_restore.py -q
+Result: all 16 cases failed because the routes did not exist (record below).
+GREEN targeted: same command after implementation; 16 passed.
+Full SQLite command: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -o addopts='' -p no:cacheprovider -v
+Full PostgreSQL command: same, with DATABASE_URL pointing to the dedicated disposable linkshelf_lin212 database on the existing local PostgreSQL at 127.0.0.1:55432.
+SQLite: 66 passed, 1 PostgreSQL-only migration test skipped.
+PostgreSQL: 67 passed. The only warning in the full runs is Starlette's existing anyio deprecation.
+The cacheprovider was disabled for full runs because the historical cache directory is not writable.
+No schema changes; existing migration and constraint tests are included in the full suites.
+No load testing or concurrency stress test was performed.
+
+Captured red, targeted green, SQLite full and PostgreSQL full output follows:
+
+FFFFFFFFFFFFFFFF                                                         [100%]
+=================================== FAILURES ===================================
+________ test_restore_preserves_identity_and_audit_and_can_delete_again ________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c4b3620>
+session = <sqlalchemy.orm.session.Session object at 0x7fd78c484050>
+
+    def test_restore_preserves_identity_and_audit_and_can_delete_again(client, session):
+        row = deleted(client, session)
+        response = client.post(f"/bookmarks/{row['id']}/restore", headers=team(1))
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_restore.py:31: AssertionError
+_____ test_conflict_rolls_back_then_restore_after_conflicting_row_deleted ______
+
+client = <starlette.testclient.TestClient object at 0x7fd78c48ead0>
+session = <sqlalchemy.orm.session.Session object at 0x7fd78c4a7490>
+
+    def test_conflict_rolls_back_then_restore_after_conflicting_row_deleted(client, session):
+        row = deleted(client, session)
+        active = client.post("/bookmarks", headers=team(1), json={"url": row["url"], "title": "Replacement"}).json()
+>       assert client.post(f"/bookmarks/{row['id']}/restore", headers=team(1)).status_code == 409
+E       AssertionError: assert 404 == 409
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = post('/bookmarks/1/restore', headers={'X-Team-ID': '1'})
+E        +      where post = <starlette.testclient.TestClient object at 0x7fd78c48ead0>.post
+E        +      and   {'X-Team-ID': '1'} = team(1)
+
+tests/test_restore.py:44: AssertionError
+___________________ test_tenant_boundary_and_cross_team_url ____________________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c3c34d0>
+session = <sqlalchemy.orm.session.Session object at 0x7fd78c481040>
+
+    def test_tenant_boundary_and_cross_team_url(client, session):
+        row = deleted(client, session, tenant=2)
+>       assert client.get("/trash", headers=team(1)).json()["items"] == []
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'items'
+
+tests/test_restore.py:56: KeyError
+_________________ test_retention_boundary_and_purge[30-False] __________________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c31dcd0>
+session = <sqlalchemy.orm.session.Session object at 0x7fd78c3ac500>, age = 30
+eligible = False
+
+    @pytest.mark.parametrize("age,eligible", [(30, False), (31, False), (29.99999, True)])
+    def test_retention_boundary_and_purge(client, session, age, eligible):
+        row = deleted(client, session, age=age)
+>       assert client.get("/trash", headers=team(1)).json()["total"] == int(eligible)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'total'
+
+tests/test_restore.py:66: KeyError
+_________________ test_retention_boundary_and_purge[31-False] __________________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c31cfc0>
+session = <sqlalchemy.orm.session.Session object at 0x7fd78c3ad6d0>, age = 31
+eligible = False
+
+    @pytest.mark.parametrize("age,eligible", [(30, False), (31, False), (29.99999, True)])
+    def test_retention_boundary_and_purge(client, session, age, eligible):
+        row = deleted(client, session, age=age)
+>       assert client.get("/trash", headers=team(1)).json()["total"] == int(eligible)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'total'
+
+tests/test_restore.py:66: KeyError
+_______________ test_retention_boundary_and_purge[29.99999-True] _______________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c2ec5f0>
+session = <sqlalchemy.orm.session.Session object at 0x7fd78c3ae210>
+age = 29.99999, eligible = True
+
+    @pytest.mark.parametrize("age,eligible", [(30, False), (31, False), (29.99999, True)])
+    def test_retention_boundary_and_purge(client, session, age, eligible):
+        row = deleted(client, session, age=age)
+>       assert client.get("/trash", headers=team(1)).json()["total"] == int(eligible)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'total'
+
+tests/test_restore.py:66: KeyError
+_______________ test_trash_cursor_ties_and_changes_between_pages _______________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c3017b0>
+session = <sqlalchemy.orm.session.Session object at 0x7fd78c3ad310>
+
+    def test_trash_cursor_ties_and_changes_between_pages(client, session):
+        rows = [deleted(client, session, url=f"https://{i}.test") for i in range(5)]
+        for row in rows:
+            session.get(Bookmark, row["id"]).created_at = NOW
+        session.commit()
+        first = client.get("/trash?limit=2", headers=team(1)).json()
+>       assert [r["id"] for r in first["items"]] == [rows[4]["id"], rows[3]["id"]]
+                                 ^^^^^^^^^^^^^^
+E       KeyError: 'items'
+
+tests/test_restore.py:80: KeyError
+____________________ test_trash_validation[cursor=bad-400] _____________________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c3028b0>
+query = 'cursor=bad', code = 400
+
+    @pytest.mark.parametrize("query,code", [("cursor=bad", 400), ("limit=0", 422), ("limit=101", 422), ("offset=0", 400), ("page=1", 400)])
+    def test_trash_validation(client, query, code):
+>       assert client.get(f"/trash?{query}", headers=team(1)).status_code == code
+E       AssertionError: assert 404 == 400
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = get('/trash?cursor=bad', headers={'X-Team-ID': '1'})
+E        +      where get = <starlette.testclient.TestClient object at 0x7fd78c3028b0>.get
+E        +      and   {'X-Team-ID': '1'} = team(1)
+
+tests/test_restore.py:95: AssertionError
+______________________ test_trash_validation[limit=0-422] ______________________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c431250>
+query = 'limit=0', code = 422
+
+    @pytest.mark.parametrize("query,code", [("cursor=bad", 400), ("limit=0", 422), ("limit=101", 422), ("offset=0", 400), ("page=1", 400)])
+    def test_trash_validation(client, query, code):
+>       assert client.get(f"/trash?{query}", headers=team(1)).status_code == code
+E       AssertionError: assert 404 == 422
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = get('/trash?limit=0', headers={'X-Team-ID': '1'})
+E        +      where get = <starlette.testclient.TestClient object at 0x7fd78c431250>.get
+E        +      and   {'X-Team-ID': '1'} = team(1)
+
+tests/test_restore.py:95: AssertionError
+_____________________ test_trash_validation[limit=101-422] _____________________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c2e8050>
+query = 'limit=101', code = 422
+
+    @pytest.mark.parametrize("query,code", [("cursor=bad", 400), ("limit=0", 422), ("limit=101", 422), ("offset=0", 400), ("page=1", 400)])
+    def test_trash_validation(client, query, code):
+>       assert client.get(f"/trash?{query}", headers=team(1)).status_code == code
+E       AssertionError: assert 404 == 422
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = get('/trash?limit=101', headers={'X-Team-ID': '1'})
+E        +      where get = <starlette.testclient.TestClient object at 0x7fd78c2e8050>.get
+E        +      and   {'X-Team-ID': '1'} = team(1)
+
+tests/test_restore.py:95: AssertionError
+_____________________ test_trash_validation[offset=0-400] ______________________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c3afc50>
+query = 'offset=0', code = 400
+
+    @pytest.mark.parametrize("query,code", [("cursor=bad", 400), ("limit=0", 422), ("limit=101", 422), ("offset=0", 400), ("page=1", 400)])
+    def test_trash_validation(client, query, code):
+>       assert client.get(f"/trash?{query}", headers=team(1)).status_code == code
+E       AssertionError: assert 404 == 400
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = get('/trash?offset=0', headers={'X-Team-ID': '1'})
+E        +      where get = <starlette.testclient.TestClient object at 0x7fd78c3afc50>.get
+E        +      and   {'X-Team-ID': '1'} = team(1)
+
+tests/test_restore.py:95: AssertionError
+______________________ test_trash_validation[page=1-400] _______________________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c3ad4f0>
+query = 'page=1', code = 400
+
+    @pytest.mark.parametrize("query,code", [("cursor=bad", 400), ("limit=0", 422), ("limit=101", 422), ("offset=0", 400), ("page=1", 400)])
+    def test_trash_validation(client, query, code):
+>       assert client.get(f"/trash?{query}", headers=team(1)).status_code == code
+E       AssertionError: assert 404 == 400
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = get('/trash?page=1', headers={'X-Team-ID': '1'})
+E        +      where get = <starlette.testclient.TestClient object at 0x7fd78c3ad4f0>.get
+E        +      and   {'X-Team-ID': '1'} = team(1)
+
+tests/test_restore.py:95: AssertionError
+_______________ test_new_routes_require_valid_team[headers0-422] _______________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c32d630>
+headers = {}, code = 422
+
+    @pytest.mark.parametrize("headers,code", [({}, 422), (team(0), 400), (team(-1), 400), ({"X-Team-ID": "bad"}, 422)])
+    def test_new_routes_require_valid_team(client, headers, code):
+>       assert client.get("/trash", headers=headers).status_code == code
+E       AssertionError: assert 404 == 422
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = get('/trash', headers={})
+E        +      where get = <starlette.testclient.TestClient object at 0x7fd78c32d630>.get
+
+tests/test_restore.py:100: AssertionError
+_______________ test_new_routes_require_valid_team[headers1-400] _______________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c32dc50>
+headers = {'X-Team-ID': '0'}, code = 400
+
+    @pytest.mark.parametrize("headers,code", [({}, 422), (team(0), 400), (team(-1), 400), ({"X-Team-ID": "bad"}, 422)])
+    def test_new_routes_require_valid_team(client, headers, code):
+>       assert client.get("/trash", headers=headers).status_code == code
+E       AssertionError: assert 404 == 400
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = get('/trash', headers={'X-Team-ID': '0'})
+E        +      where get = <starlette.testclient.TestClient object at 0x7fd78c32dc50>.get
+
+tests/test_restore.py:100: AssertionError
+_______________ test_new_routes_require_valid_team[headers2-400] _______________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c2d42f0>
+headers = {'X-Team-ID': '-1'}, code = 400
+
+    @pytest.mark.parametrize("headers,code", [({}, 422), (team(0), 400), (team(-1), 400), ({"X-Team-ID": "bad"}, 422)])
+    def test_new_routes_require_valid_team(client, headers, code):
+>       assert client.get("/trash", headers=headers).status_code == code
+E       AssertionError: assert 404 == 400
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = get('/trash', headers={'X-Team-ID': '-1'})
+E        +      where get = <starlette.testclient.TestClient object at 0x7fd78c2d42f0>.get
+
+tests/test_restore.py:100: AssertionError
+_______________ test_new_routes_require_valid_team[headers3-422] _______________
+
+client = <starlette.testclient.TestClient object at 0x7fd78c2d4ad0>
+headers = {'X-Team-ID': 'bad'}, code = 422
+
+    @pytest.mark.parametrize("headers,code", [({}, 422), (team(0), 400), (team(-1), 400), ({"X-Team-ID": "bad"}, 422)])
+    def test_new_routes_require_valid_team(client, headers, code):
+>       assert client.get("/trash", headers=headers).status_code == code
+E       AssertionError: assert 404 == 422
+E        +  where 404 = <Response [404 Not Found]>.status_code
+E        +    where <Response [404 Not Found]> = get('/trash', headers={'X-Team-ID': 'bad'})
+E        +      where get = <starlette.testclient.TestClient object at 0x7fd78c2d4ad0>.get
+
+tests/test_restore.py:100: AssertionError
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+.venv/lib/python3.13/site-packages/_pytest/cacheprovider.py:475
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/_pytest/cacheprovider.py:475: PytestCacheWarning: cache could not write path /workspace/linkshelf/.pytest_cache/v/cache/nodeids: [Errno 13] Permission denied: '/workspace/linkshelf/.pytest_cache/v/cache/nodeids'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+.venv/lib/python3.13/site-packages/_pytest/cacheprovider.py:429
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/_pytest/cacheprovider.py:429: PytestCacheWarning: cache could not write path /workspace/linkshelf/.pytest_cache/v/cache/lastfailed: [Errno 13] Permission denied: '/workspace/linkshelf/.pytest_cache/v/cache/lastfailed'
+    config.cache.set("cache/lastfailed", self.lastfailed)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_restore.py::test_restore_preserves_identity_and_audit_and_can_delete_again
+FAILED tests/test_restore.py::test_conflict_rolls_back_then_restore_after_conflicting_row_deleted
+FAILED tests/test_restore.py::test_tenant_boundary_and_cross_team_url - KeyEr...
+FAILED tests/test_restore.py::test_retention_boundary_and_purge[30-False] - K...
+FAILED tests/test_restore.py::test_retention_boundary_and_purge[31-False] - K...
+FAILED tests/test_restore.py::test_retention_boundary_and_purge[29.99999-True]
+FAILED tests/test_restore.py::test_trash_cursor_ties_and_changes_between_pages
+FAILED tests/test_restore.py::test_trash_validation[cursor=bad-400] - Asserti...
+FAILED tests/test_restore.py::test_trash_validation[limit=0-422] - AssertionE...
+FAILED tests/test_restore.py::test_trash_validation[limit=101-422] - Assertio...
+FAILED tests/test_restore.py::test_trash_validation[offset=0-400] - Assertion...
+FAILED tests/test_restore.py::test_trash_validation[page=1-400] - AssertionEr...
+FAILED tests/test_restore.py::test_new_routes_require_valid_team[headers0-422]
+FAILED tests/test_restore.py::test_new_routes_require_valid_team[headers1-400]
+FAILED tests/test_restore.py::test_new_routes_require_valid_team[headers2-400]
+FAILED tests/test_restore.py::test_new_routes_require_valid_team[headers3-422]
+................                                                         [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+.venv/lib/python3.13/site-packages/_pytest/cacheprovider.py:475
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/_pytest/cacheprovider.py:475: PytestCacheWarning: cache could not write path /workspace/linkshelf/.pytest_cache/v/cache/nodeids: [Errno 13] Permission denied: '/workspace/linkshelf/.pytest_cache/v/cache/nodeids'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-8.4.1, pluggy-1.7.0 -- /workspace/linkshelf/.venv/bin/python
+rootdir: /workspace/linkshelf
+configfile: pytest.ini
+testpaths: tests
+collecting ... collected 67 items
+
+tests/test_bookmarks.py::test_health PASSED                              [  1%]
+tests/test_bookmarks.py::test_create_and_fetch_bookmark PASSED           [  2%]
+tests/test_bookmarks.py::test_missing_team_header_is_rejected PASSED     [  4%]
+tests/test_bookmarks.py::test_non_positive_team_header_is_rejected PASSED [  5%]
+tests/test_bookmarks.py::test_non_integer_team_header_is_rejected PASSED [  7%]
+tests/test_bookmarks.py::test_reads_are_scoped_to_team PASSED            [  8%]
+tests/test_bookmarks.py::test_unique_url_per_team PASSED                 [ 10%]
+tests/test_bookmarks.py::test_update_bookmark PASSED                     [ 11%]
+tests/test_bookmarks.py::test_update_to_existing_url_is_conflict PASSED  [ 13%]
+tests/test_bookmarks.py::test_offset_pagination PASSED                   [ 14%]
+tests/test_bookmarks.py::test_pagination_validation PASSED               [ 16%]
+tests/test_bookmarks.py::test_soft_delete_writes_audit_row PASSED        [ 17%]
+tests/test_bookmarks.py::test_delete_does_not_remove_other_teams_rows PASSED [ 19%]
+tests/test_bookmarks.py::test_validation_errors PASSED                   [ 20%]
+tests/test_bookmarks.py::test_deleted_url_can_be_reused PASSED           [ 22%]
+tests/test_models.py::test_bookmark_defaults_to_utc PASSED               [ 23%]
+tests/test_models.py::test_audit_rows_are_independent_of_bookmarks PASSED [ 25%]
+tests/test_pagination.py::test_insert_during_scrolling_does_not_repeat_a_row PASSED [ 26%]
+tests/test_pagination.py::test_delete_during_scrolling_does_not_skip_a_row PASSED [ 28%]
+tests/test_pagination.py::test_delete_of_the_cursor_row_still_resumes_after_it PASSED [ 29%]
+tests/test_pagination.py::test_walk_returns_every_row_once_in_order PASSED [ 31%]
+tests/test_pagination.py::test_equal_created_at_values_use_id_tiebreaker PASSED [ 32%]
+tests/test_pagination.py::test_last_page_has_no_next_cursor_and_exact_fit_is_terminal PASSED [ 34%]
+tests/test_pagination.py::test_empty_team_has_no_cursor PASSED           [ 35%]
+tests/test_pagination.py::test_cursor_is_scoped_to_the_tenant PASSED     [ 37%]
+tests/test_pagination.py::test_soft_deleted_rows_are_excluded_from_cursor_pages PASSED [ 38%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[not-a-cursor] PASSED [ 40%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v2.abc] PASSED [ 41%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.] PASSED  [ 43%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.!!!!] PASSED [ 44%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMCswMDowMA==] PASSED [ 46%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMHxub3QtYW4taW50] PASSED [ 47%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMHww] PASSED [ 49%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMHwz] PASSED [ 50%]
+tests/test_pagination.py::test_cursor_token_round_trips_and_is_opaque PASSED [ 52%]
+tests/test_pagination.py::test_offset_form_still_works_and_is_marked_deprecated PASSED [ 53%]
+tests/test_pagination.py::test_page_form_is_translated_to_offset PASSED  [ 55%]
+tests/test_pagination.py::test_cursor_default_response_has_no_deprecation_headers PASSED [ 56%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[cursor=v1.abc&offset=0] PASSED [ 58%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[cursor=v1.abc&page=1] PASSED [ 59%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[cursor=v1.abc&offset=1&page=1] PASSED [ 61%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[offset=0&page=1] PASSED [ 62%]
+tests/test_pagination.py::test_mutually_exclusive_detail_message PASSED  [ 64%]
+tests/test_pagination.py::test_legacy_parameters_keep_their_validation PASSED [ 65%]
+tests/test_pagination.py::test_cursor_index_migration_preserves_rows_and_is_idempotent PASSED [ 67%]
+tests/test_pagination.py::test_cursor_index_migration_on_postgres SKIPPED [ 68%]
+tests/test_pagination.py::test_cursor_queries_exclude_deleted_rows_at_the_sql_level PASSED [ 70%]
+tests/test_restore.py::test_restore_preserves_identity_and_audit_and_can_delete_again PASSED [ 71%]
+tests/test_restore.py::test_conflict_rolls_back_then_restore_after_conflicting_row_deleted PASSED [ 73%]
+tests/test_restore.py::test_tenant_boundary_and_cross_team_url PASSED    [ 74%]
+tests/test_restore.py::test_retention_boundary_and_purge[30-False] PASSED [ 76%]
+tests/test_restore.py::test_retention_boundary_and_purge[31-False] PASSED [ 77%]
+tests/test_restore.py::test_retention_boundary_and_purge[29.99999-True] PASSED [ 79%]
+tests/test_restore.py::test_trash_cursor_ties_and_changes_between_pages PASSED [ 80%]
+tests/test_restore.py::test_trash_validation[cursor=bad-400] PASSED      [ 82%]
+tests/test_restore.py::test_trash_validation[limit=0-422] PASSED         [ 83%]
+tests/test_restore.py::test_trash_validation[limit=101-422] PASSED       [ 85%]
+tests/test_restore.py::test_trash_validation[offset=0-400] PASSED        [ 86%]
+tests/test_restore.py::test_trash_validation[page=1-400] PASSED          [ 88%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers0-422] PASSED [ 89%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers1-400] PASSED [ 91%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers2-400] PASSED [ 92%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers3-422] PASSED [ 94%]
+tests/test_soft_delete.py::test_deleted_rows_are_hidden_and_retained PASSED [ 95%]
+tests/test_soft_delete.py::test_purge_boundary_tenant_isolation_and_audit_survival PASSED [ 97%]
+tests/test_soft_delete.py::test_delete_audit_failure_rolls_back PASSED   [ 98%]
+tests/test_soft_delete.py::test_upgrade_preserves_data_and_changes_uniqueness PASSED [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 66 passed, 1 skipped, 1 warning in 2.60s ===================
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-8.4.1, pluggy-1.7.0 -- /workspace/linkshelf/.venv/bin/python
+rootdir: /workspace/linkshelf
+configfile: pytest.ini
+testpaths: tests
+collecting ... collected 67 items
+
+tests/test_bookmarks.py::test_health PASSED                              [  1%]
+tests/test_bookmarks.py::test_create_and_fetch_bookmark PASSED           [  2%]
+tests/test_bookmarks.py::test_missing_team_header_is_rejected PASSED     [  4%]
+tests/test_bookmarks.py::test_non_positive_team_header_is_rejected PASSED [  5%]
+tests/test_bookmarks.py::test_non_integer_team_header_is_rejected PASSED [  7%]
+tests/test_bookmarks.py::test_reads_are_scoped_to_team PASSED            [  8%]
+tests/test_bookmarks.py::test_unique_url_per_team PASSED                 [ 10%]
+tests/test_bookmarks.py::test_update_bookmark PASSED                     [ 11%]
+tests/test_bookmarks.py::test_update_to_existing_url_is_conflict PASSED  [ 13%]
+tests/test_bookmarks.py::test_offset_pagination PASSED                   [ 14%]
+tests/test_bookmarks.py::test_pagination_validation PASSED               [ 16%]
+tests/test_bookmarks.py::test_soft_delete_writes_audit_row PASSED        [ 17%]
+tests/test_bookmarks.py::test_delete_does_not_remove_other_teams_rows PASSED [ 19%]
+tests/test_bookmarks.py::test_validation_errors PASSED                   [ 20%]
+tests/test_bookmarks.py::test_deleted_url_can_be_reused PASSED           [ 22%]
+tests/test_models.py::test_bookmark_defaults_to_utc PASSED               [ 23%]
+tests/test_models.py::test_audit_rows_are_independent_of_bookmarks PASSED [ 25%]
+tests/test_pagination.py::test_insert_during_scrolling_does_not_repeat_a_row PASSED [ 26%]
+tests/test_pagination.py::test_delete_during_scrolling_does_not_skip_a_row PASSED [ 28%]
+tests/test_pagination.py::test_delete_of_the_cursor_row_still_resumes_after_it PASSED [ 29%]
+tests/test_pagination.py::test_walk_returns_every_row_once_in_order PASSED [ 31%]
+tests/test_pagination.py::test_equal_created_at_values_use_id_tiebreaker PASSED [ 32%]
+tests/test_pagination.py::test_last_page_has_no_next_cursor_and_exact_fit_is_terminal PASSED [ 34%]
+tests/test_pagination.py::test_empty_team_has_no_cursor PASSED           [ 35%]
+tests/test_pagination.py::test_cursor_is_scoped_to_the_tenant PASSED     [ 37%]
+tests/test_pagination.py::test_soft_deleted_rows_are_excluded_from_cursor_pages PASSED [ 38%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[not-a-cursor] PASSED [ 40%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v2.abc] PASSED [ 41%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.] PASSED  [ 43%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.!!!!] PASSED [ 44%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMCswMDowMA==] PASSED [ 46%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMHxub3QtYW4taW50] PASSED [ 47%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMHww] PASSED [ 49%]
+tests/test_pagination.py::test_malformed_cursor_is_rejected[v1.MjAyNi0xMC0xOVQxMjowMDowMHwz] PASSED [ 50%]
+tests/test_pagination.py::test_cursor_token_round_trips_and_is_opaque PASSED [ 52%]
+tests/test_pagination.py::test_offset_form_still_works_and_is_marked_deprecated PASSED [ 53%]
+tests/test_pagination.py::test_page_form_is_translated_to_offset PASSED  [ 55%]
+tests/test_pagination.py::test_cursor_default_response_has_no_deprecation_headers PASSED [ 56%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[cursor=v1.abc&offset=0] PASSED [ 58%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[cursor=v1.abc&page=1] PASSED [ 59%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[cursor=v1.abc&offset=1&page=1] PASSED [ 61%]
+tests/test_pagination.py::test_incompatible_parameter_combinations_are_rejected[offset=0&page=1] PASSED [ 62%]
+tests/test_pagination.py::test_mutually_exclusive_detail_message PASSED  [ 64%]
+tests/test_pagination.py::test_legacy_parameters_keep_their_validation PASSED [ 65%]
+tests/test_pagination.py::test_cursor_index_migration_preserves_rows_and_is_idempotent PASSED [ 67%]
+tests/test_pagination.py::test_cursor_index_migration_on_postgres PASSED [ 68%]
+tests/test_pagination.py::test_cursor_queries_exclude_deleted_rows_at_the_sql_level PASSED [ 70%]
+tests/test_restore.py::test_restore_preserves_identity_and_audit_and_can_delete_again PASSED [ 71%]
+tests/test_restore.py::test_conflict_rolls_back_then_restore_after_conflicting_row_deleted PASSED [ 73%]
+tests/test_restore.py::test_tenant_boundary_and_cross_team_url PASSED    [ 74%]
+tests/test_restore.py::test_retention_boundary_and_purge[30-False] PASSED [ 76%]
+tests/test_restore.py::test_retention_boundary_and_purge[31-False] PASSED [ 77%]
+tests/test_restore.py::test_retention_boundary_and_purge[29.99999-True] PASSED [ 79%]
+tests/test_restore.py::test_trash_cursor_ties_and_changes_between_pages PASSED [ 80%]
+tests/test_restore.py::test_trash_validation[cursor=bad-400] PASSED      [ 82%]
+tests/test_restore.py::test_trash_validation[limit=0-422] PASSED         [ 83%]
+tests/test_restore.py::test_trash_validation[limit=101-422] PASSED       [ 85%]
+tests/test_restore.py::test_trash_validation[offset=0-400] PASSED        [ 86%]
+tests/test_restore.py::test_trash_validation[page=1-400] PASSED          [ 88%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers0-422] PASSED [ 89%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers1-400] PASSED [ 91%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers2-400] PASSED [ 92%]
+tests/test_restore.py::test_new_routes_require_valid_team[headers3-422] PASSED [ 94%]
+tests/test_soft_delete.py::test_deleted_rows_are_hidden_and_retained PASSED [ 95%]
+tests/test_soft_delete.py::test_purge_boundary_tenant_isolation_and_audit_survival PASSED [ 97%]
+tests/test_soft_delete.py::test_delete_audit_failure_rolls_back PASSED   [ 98%]
+tests/test_soft_delete.py::test_upgrade_preserves_data_and_changes_uniqueness PASSED [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/starlette/testclient.py:51
+  /workspace/linkshelf/.venv/lib/python3.13/site-packages/starlette/testclient.py:51: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 67 passed, 1 warning in 2.67s =========================
+
+Archive verification:
+Extracted linkshelf-feature.zip to /tmp/lin212-archive-check, changed cwd to
+/tmp/lin212-archive-check/linkshelf, and ran:
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/linkshelf/.venv/bin/python -m pytest -o addopts='' -p no:cacheprovider -q
+Result: 66 passed, 1 skipped, 1 pre-existing warning in 2.62s.
+ZIP CRC integrity check passed. Archive entries are source, documentation,
+migrations and test records only; no .git, virtualenv, caches, databases,
+.env files or credential files are included. Historical documentation contains
+local demo connection examples, not live credentials.

@@ -150,3 +150,31 @@ tests/
   conftest.py, test_bookmarks.py, test_models.py,
   test_pagination.py, test_soft_delete.py
 ```
+
+### Trash and restore (LIN-212)
+
+`GET /trash` returns the team's recoverable deleted bookmarks in the existing
+`BookmarkPage` shape. Use `limit` (1–100, default 20) and `cursor`; ordering is
+`created_at DESC, id DESC`, with the existing opaque v1 cursor and limit+1
+lookahead. This new endpoint rejects `page` and `offset` with 400; the active
+list's legacy compatibility remains unchanged. Total is a live count, not a
+snapshot. Restores, purges and new deletions can change membership during paging;
+restart from the first page to refresh. Cursors are values, not tenant credentials.
+
+`POST /bookmarks/{id}/restore` returns 200 with the original bookmark, preserving
+its ID, creation timestamp, URL and title. It clears `deleted_at` only for the
+selected team and only while deletion age is strictly less than 30 days.
+Trash uses that same eligibility rule; expired rows are omitted even if purge
+has not run. Missing, purged, expired, foreign-team and already-active IDs all
+return the same 404. Repeating a successful restore therefore returns 404.
+
+The active-only `(team_id, url)` unique index remains authoritative. A conflicting
+active URL returns 409 and rolls back the restore; no bookmark is overwritten.
+Delete or edit the conflicting active bookmark before retrying. Deleted copies
+and copies in other teams do not conflict. Conditional SQL updates and the
+unique index arbitrate concurrent writes; no pre-read ownership check is used.
+Deletion audit snapshots remain unchanged; restoration adds no audit event.
+No schema change or migration is needed. `X-Team-ID` is still only a demo tenant
+selector: real authentication and authorization remain outside this starter.
+
+Verification and packaging for this change are recorded in `test-output.txt`.
