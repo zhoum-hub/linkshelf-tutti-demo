@@ -27,7 +27,7 @@ Python.
    columns `timezone=True`. Do not introduce local-time comparisons.
 4. **Both databases must stay in sync.** If you change a model, update
    `migrations/001_initial.sql` (or add a new migration) in the same change.
-5. **Deletes set deleted_at and write an audit record in one transaction.**
+5. **Deletes and successful restores write audit snapshots in the same transaction as their bookmark update.**
    Reads and updates must exclude deleted rows. The tenant-scoped purge job
    removes bookmarks after 30 days and must never remove audit records.
 
@@ -36,7 +36,6 @@ Python.
 Do not add these unless the task explicitly asks for them; they are planned
 historical follow-ups, not forgotten work:
 
-- a trash listing or a restore endpoint
 - real authentication
 
 If a change would add one of these early, call it out in the pull request

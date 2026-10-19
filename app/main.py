@@ -7,7 +7,9 @@ there is no user identity, token check, or permission model in this starter.
 
 from __future__ import annotations
 
+import sqlite3
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from sqlalchemy import and_, func, or_, select, update
@@ -17,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.db import get_session, init_db
 from app.models import Bookmark, BookmarkAudit, utcnow
 from app.pagination import InvalidCursor, decode_cursor, encode_cursor
-from app.schemas import BookmarkCreate, BookmarkOut, BookmarkPage, BookmarkUpdate
+from app.schemas import BookmarkCreate, BookmarkOut, BookmarkPage, BookmarkUpdate, ErrorResponse
 
 
 @asynccontextmanager
@@ -153,6 +155,131 @@ def list_bookmarks(
         page=page,
         offset=offset,
     )
+
+
+@app.get(
+    "/trash",
+    response_model=BookmarkPage,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid cursor, page/offset usage, or non-positive X-Team-ID."},
+    },
+)
+def list_trash(
+    cursor: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int | None = Query(None, ge=0),
+    page: int | None = Query(None, ge=1),
+    team_id: int = Depends(current_team_id),
+    session: Session = Depends(get_session),
+) -> BookmarkPage:
+    """List the team's recoverable bookmarks, newest first using opaque v1 cursors.
+
+    Only rows deleted strictly less than 30 days ago are included, even if
+    expired rows await purge. Ordering is created_at DESC, id DESC.
+    X-Team-ID is a demo tenant selector, not authentication.
+    """
+    if offset is not None or page is not None:
+        raise HTTPException(status_code=400, detail="trash supports cursor pagination only")
+    base = select(Bookmark).where(
+        Bookmark.team_id == team_id,
+        Bookmark.deleted_at > utcnow() - timedelta(days=30),
+    )
+    ordered = base.order_by(Bookmark.created_at.desc(), Bookmark.id.desc())
+    if cursor is not None:
+        try:
+            key = decode_cursor(cursor)
+        except InvalidCursor as exc:
+            raise HTTPException(status_code=400, detail=f"invalid cursor: {exc}") from None
+        ordered = ordered.where(or_(
+            Bookmark.created_at < key.created_at,
+            and_(Bookmark.created_at == key.created_at, Bookmark.id < key.id),
+        ))
+    rows = session.scalars(ordered.limit(limit + 1)).all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return BookmarkPage(
+        items=[BookmarkOut.model_validate(row) for row in rows],
+        limit=limit,
+        total=session.scalar(select(func.count()).select_from(base.subquery())) or 0,
+        next_cursor=encode_cursor(rows[-1].created_at, rows[-1].id) if has_more else None,
+    )
+
+
+def _is_active_url_conflict(exc: IntegrityError) -> bool:
+    """Recognize only the active bookmark URL index on supported databases."""
+    original = exc.orig
+    if getattr(original, "sqlstate", None) == "23505":
+        return (
+            getattr(getattr(original, "diag", None), "constraint_name", None)
+            == "uq_bookmarks_team_id_url_active"
+        )
+    return (
+        isinstance(original, sqlite3.IntegrityError)
+        and getattr(original, "sqlite_errorcode", None) == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+        and str(original) == "UNIQUE constraint failed: bookmarks.team_id, bookmarks.url"
+    )
+
+
+@app.post(
+    "/bookmarks/{bookmark_id}/restore",
+    response_model=BookmarkOut,
+    responses={
+        400: {"model": ErrorResponse, "description": "X-Team-ID must be positive."},
+        404: {"model": ErrorResponse, "description": "Missing, purged, expired (30 days or older), foreign-team, or already-active bookmark."},
+        409: {"model": ErrorResponse, "description": "An active bookmark in this team already uses the URL, including a re-added URL. No row is overwritten."},
+        500: {"description": "Audit-write or other server failure; restoration is rolled back.", "content": {"text/plain": {"schema": {"type": "string"}, "example": "Internal Server Error"}}},
+    },
+)
+def restore_bookmark(
+    bookmark_id: int,
+    team_id: int = Depends(current_team_id),
+    session: Session = Depends(get_session),
+) -> Bookmark:
+    """Restore a retained bookmark and append a restore audit snapshot atomically.
+
+    Eligibility is strictly less than 30 days since deletion. The original
+    identity, URL, title and creation time are preserved. The audit's historical
+    deleted_at column records the UTC event time; delete snapshots are retained.
+    Rejected or failed restores add no success event. Audit-write failures roll
+    back the restoration and remain server errors, not URL conflicts.
+    X-Team-ID is a demo tenant selector, not authentication.
+    """
+    restored_at = utcnow()
+    # Claim an eligible row atomically. Only this UPDATE can produce a URL
+    # conflict; audit and commit failures must remain server errors.
+    try:
+        bookmark = session.execute(
+            update(Bookmark)
+            .where(Bookmark.id == bookmark_id, Bookmark.team_id == team_id,
+                   Bookmark.deleted_at > restored_at - timedelta(days=30))
+            .values(deleted_at=None)
+            .returning(Bookmark)
+        ).scalar_one_or_none()
+    except IntegrityError as exc:
+        session.rollback()
+        if _is_active_url_conflict(exc):
+            raise HTTPException(
+                status_code=409, detail="A bookmark with this URL already exists for the team"
+            ) from None
+        raise
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    try:
+        session.add(
+            BookmarkAudit(
+                bookmark_id=bookmark.id,
+                team_id=bookmark.team_id,
+                url=bookmark.url,
+                title=bookmark.title,
+                action="restore",
+                deleted_at=restored_at,
+            )
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    return bookmark
 
 
 @app.post("/bookmarks", response_model=BookmarkOut, status_code=status.HTTP_201_CREATED)
